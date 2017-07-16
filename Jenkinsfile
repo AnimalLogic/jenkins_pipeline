@@ -9,6 +9,7 @@ pipeline {
     stage('test') {
       steps {
         sh 'echo "running unit tests"'
+        sh "libraryResource 'al/jenkins/batman.py'"
       }
     }
     stage('release') {
