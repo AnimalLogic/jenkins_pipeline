@@ -1,0 +1,48 @@
+#!/usr/bin/env groovy  
+@Library('AL@fix_mosnter_pipeline') _
+
+pipeline {
+  agent none
+  parameters {
+ 
+      string(defaultValue: "2.0.rc1.38.21", description: 'The version against the new version is compared', name: 'REFERENCE_REZ_VERSION')
+      string(defaultValue: "", description: 'The timestap to use when comparing presets.', name: 'BAKE_TIMESTAMP')
+      string(defaultValue: "", description: 'Extra packages path to test solves with introuction of new packages and dependencies.', name: 'EXTRA_PACKAGES_PATH')
+      text(defaultValue: "/presets/Rez/applications/maya/ninjago/beta /presets/Rez/applications/maya/ninjago/production /presets/Rez/applications/XSI/ninjago/beta /presets/Rez/applications/XSI/ninjago/production /presets/Rez/applications/Houdini/ninjago/beta /presets/Rez/applications/Houdini/ninjago/production /presets/Rez/applications/Nuke/ninjago/beta /presets/Rez/applications/Nuke/ninjago/production", description: 'The presets to compare', name: 'LAUNCHER_PRESETS')
+  }
+
+  stages{
+    stage('Testing'){
+      steps{
+
+      parallel(
+
+        linux: {
+          node('CentOS-6.6&&!restricted'){
+            checkout scm
+            runRezLinuxUnitTests("/tmp/${BUILD_TAG}/packages")
+          }
+        },
+        windows: {
+          node('windows'){
+            checkout scm
+            runRezWindowsUnitTests("C:\\tmp\\${BUILD_TAG}\\package")
+           }
+        },
+        mac: {
+          node('mac'){
+            checkout scm
+            runRezLinuxUnitTests("/tmp/${BUILD_TAG}/packages")
+
+           }
+        },
+        integration: {
+          node('CentOS-6.6&&!restricted'){
+            checkout scm
+            runRezLinuxIntegrationTests("/tmp/${BUILD_TAG}/packages")
+          }
+        })
+      }
+    }
+  }
+}// end of pipeline

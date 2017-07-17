@@ -1,0 +1,370 @@
+properties([
+        parameters([string(defaultValue: "2.0.rc1.38.21", description: 'The version against the new version is compared', name: 'REFERENCE_REZ_VERSION'),
+                    string(defaultValue: "", description: 'The timestap to use when comparing presets.', name: 'BAKE_TIMESTAMP'),
+                    string(defaultValue: "", description: 'Extra packages path to test solves with introuction of new packages and dependencies.', name: 'EXTRA_PACKAGES_PATH'),
+                    text(defaultValue: "/presets/Rez/applications/maya/ninjago/beta /presets/Rez/applications/maya/ninjago/production /presets/Rez/applications/XSI/ninjago/beta /presets/Rez/applications/XSI/ninjago/production /presets/Rez/applications/Houdini/ninjago/beta /presets/Rez/applications/Houdini/ninjago/production /presets/Rez/applications/Nuke/ninjago/beta /presets/Rez/applications/Nuke/ninjago/production", description: 'The presets to compare', name: 'LAUNCHER_PRESETS'),
+                    booleanParam(defaultValue: false, description: 'Skips Unit tests', name: 'SKIP_UT'),
+                    booleanParam(defaultValue: false, description: 'Skips Integration tests', name: 'SKIP_IT') 
+                  ])
+      ])
+import java.time.Instant;
+def epoch_date=Instant.now().getEpochSecond();
+
+def platformBuilder = [:]
+
+if (!params.SKIP_UT){
+
+    platformBuilder['CentOSNR'] = {
+        node('CentOSNR') {
+            
+            def context="CentOS_unit_tests"
+            algit.checkout('http://github.al.com.au/rnd/rez',env.BRANCH_NAME)
+            algit.reportStatusToGitHub("PENDING", "Build Pending", context) 
+
+
+            withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/rez_unit_test_${BUILD_TAG}/packages"]) {
+                sh "mkdir -p $REZ_LOCAL_PACKAGES_PATH"    
+                sh "rez-build -i"
+                def version = global.shellCommandOutput("grep -e '^version' package.yaml | sed 's/.*: //g'", verbose=true)
+                withEnv(["REZ_CONFIG_FILE=/tmp/rez_unit_test_${BUILD_TAG}/packages/rez/${version}/CentOS-6.2_thru_7/python-2.6/lib/python2.6/site-packages/rez-${version}-py2.6.egg/rez/rezconfig.py"]) {
+                    stage("CentOS Unit tests"){
+                        status = sh(returnStatus: true, script: "source /tmp/rez_unit_test_${BUILD_TAG}/packages/rez/${version}/CentOS-6.2_thru_7/python-2.6/bin/init.sh && rez-selftest ")
+                        if (status == 0){
+                            currentBuild.result = "SUCCESS"
+                            algit.reportStatusToGitHub("SUCCESS", "Build Successful", context)
+                        } else {
+                            println("CentOS unit tests Failed!!!. Marking build as failed")
+                            currentBuild.result = "FAILURE"
+                            algit.reportStatusToGitHub("ERROR", "Build Failed", context) 
+                            sh "exit 1"  //fail the stage
+                        }
+
+                    }
+                    stage("CentOS clean up"){
+                        sh "rm -rf $REZ_LOCAL_PACKAGES_PATH"    
+                    }
+                }
+            }
+        }
+    }
+
+
+    platformBuilder['mac'] = {
+        node('mac') {
+
+            def context="OSX_unit_tests"
+            algit.checkout('http://github.al.com.au/rnd/rez')
+            algit.reportStatusToGitHub("PENDING", "Build Pending", context) 
+
+            withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/rez_unit_test_${BUILD_TAG}/packages"]) {
+                sh "mkdir -p $REZ_LOCAL_PACKAGES_PATH"    
+                def stringForVersion = '_rez_version = \\"${BUILD_NUMBER}\\"'
+                sh "echo ${stringForVersion} > src/rez/utils/_version.py"
+                sh "/usr/bin/python2.7 install_windows.py -v $REZ_LOCAL_PACKAGES_PATH/rez/${BUILD_TAG}"
+
+                withEnv(["PATH=$REZ_LOCAL_PACKAGES_PATH/rez/${BUILD_TAG}/bin/rez:$PATH"]) {
+                    stage("Mac Unit tests"){
+                        status = sh(returnStatus: true, script: "rez selftest ")
+                        if (status == 0){
+                            currentBuild.result = "SUCCESS"
+                            algit.reportStatusToGitHub("SUCCESS", "Build Successful", context)
+                        } else {
+                            println("OSX unit tests Failed!!!. Marking build as failed")
+                            currentBuild.result = "FAILURE"
+                            algit.reportStatusToGitHub("ERROR", "Build Failed", context) 
+                            sh "exit 1"  //fail the stage
+                        }
+
+                    }
+                    stage("OSX clean up"){
+                        sh "rm -rf $REZ_LOCAL_PACKAGES_PATH"    
+                    }
+                }
+            }
+        }
+    }
+
+    platformBuilder['windows'] = {
+        node('windows') {
+            
+            def context="Windows_unit_tests"
+            algit.checkout('http://github.al.com.au/rnd/rez')
+            algit.reportStatusToGitHub("PENDING", "Build Pending", context) 
+            
+            withEnv(["REZ_LOCAL_PACKAGES_PATH=C:\\tmp\\rez_unit_test_${BUILD_NUMBER}\\package"]) {
+                bat("mkdir %REZ_LOCAL_PACKAGES_PATH%")    
+                def stringForVersion = '_rez_version = "%BUILD_NUMBER%"'
+                // There is a problem with the long name created by the multibranch do need to rename the current branch 
+                def cwd =  global.shellCommandOutput("echo %CD%")
+                dir(".."){
+                    bat("if exist rez_UT_${BRANCH_NAME} ( rename rez_UT_${BRANCH_NAME} rez_UT_${BRANCH_NAME}.bck )")
+                    bat("rename ${cwd} rez_UT_${BRANCH_NAME}")
+                    bat("if exist rez_UT_${BRANCH_NAME}.bck ( rmdir /s/q rez_UT_${BRANCH_NAME}.bck )")
+                    dir("rez_UT_${BRANCH_NAME}"){
+                        bat("echo ${stringForVersion} > src\\rez\\utils\\_version.py")
+                        bat("C:\\Python27\\python install_windows.py -v %REZ_LOCAL_PACKAGES_PATH%\\rez\\%BUILD_NUMBER%")
+            
+                        withEnv(["PATH=${REZ_LOCAL_PACKAGES_PATH}\\rez\\${BUILD_NUMBER}\\Scripts\\rez;${PATH}","REZ_BUILD_THREAD_COUNT=1"]) {
+                            stage("Windows Unit tests"){
+                                status = bat(returnStatus: true, script: "rez selftest")
+                                if (status == 0){
+                                    currentBuild.result = "SUCCESS"
+                                    algit.reportStatusToGitHub("SUCCESS", "Build Successful", context)
+                                } else {
+                                    println("Windows unit tests Failed!!!. Marking build as failed")
+                                    currentBuild.result = "FAILURE"
+                                    algit.reportStatusToGitHub("ERROR", "Build Failed", context) 
+                                    sh "exit 1"  //fail the stage
+                                }
+                
+                            }
+                            stage("Windows clean up"){
+                                bat("if exist ${REZ_LOCAL_PACKAGES_PATH} ( rmdir /s/q ${REZ_LOCAL_PACKAGES_PATH} )")
+                            }
+                        }
+                    }
+                }    
+            }
+        }
+    }
+}// end if skip UT
+
+if (!params.SKIP_IT){
+
+    platformBuilder['Integration'] = {
+        def context="CentOS_integration_tests"
+        node('CentOSNR') {
+            algit.checkout('http://github.al.com.au/rnd/rez',env.BRANCH_NAME)
+            algit.reportStatusToGitHub("PENDING", "Build Pending", context) 
+
+
+            withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/rez_integration_test_${BUILD_TAG}/packages"]) {
+                sh "mkdir -p $REZ_LOCAL_PACKAGES_PATH"    
+                sh "rez-build -i --variants 0" 
+                def version = global.shellCommandOutput("grep -e '^version' package.yaml | sed 's/.*: //g'", verbose=true)
+                withEnv(["REZ_CONFIG_FILE=/tmp/rez_unit_test_${BUILD_TAG}/packages/rez/${version}/CentOS-6.2_thru_7/python-2.6/lib/python2.6/site-packages/rez-${version}-py2.6.egg/rez/rezconfig.py"]) {
+                    stage("Bake Presets"){
+                        def bake_ts = params.BAKE_TIMESTAMP
+                        def presets_list = params.LAUNCHER_PRESETS
+                        sh """
+                        set +x
+                        if [[ "\${bake_ts}" == "" ]]
+                        then
+                            epoch_date=${epoch_date}
+                        else
+                            epoch_date=`date --date="\${bake_ts}" +"%s"`
+                        fi
+                
+                        for preset in ${presets_list}
+                        do
+                            echo \${preset}
+                            # run rez bake for each preset and get the list of packages 
+                            rez_pacakge_request=`rez launcher bake --source \${preset} --time=\${epoch_date} --skip-resolve --only-packages | sed 's/REZ_PACKAGES_REQUEST=//g' | sed "s/'//g"` 
+                            echo 'Package Request: ' \${rez_pacakge_request}
+                            file_suffix=`echo \${preset} | sed 's@/@_@g'`
+                            echo \${rez_pacakge_request} > ${REZ_LOCAL_PACKAGES_PATH}/package_request\${file_suffix}.txt
+                        done
+                
+                        echo 'Finished baking presets to file'
+                        """
+                    } //end bake stage
+                    stage("Resolve requests"){
+                        def reference_rez_version = params.REFERENCE_REZ_VERSION
+                        def bake_ts = params.BAKE_TIMESTAMP
+                        def presets_list = params.LAUNCHER_PRESETS
+                        def extra_packages_path = params.EXTRA_PACKAGES_PATH
+                        
+                        sh """
+                        set +x
+                        for version_tag in  reference current
+                        do
+                            if [[ "\${version_tag}" == "reference" ]]
+                            then
+                                REZ_VERSION=${reference_rez_version}
+                                REZ_INIT_SCRIPT=/film/tools/packages/rez/\${REZ_VERSION}/CentOS-6.2_thru_7/python-2.6/bin/init.sh        
+                            else
+                                REZ_VERSION=`grep -e "^version" package.yaml | sed 's/.*: //g'`
+                                REZ_INIT_SCRIPT=${REZ_LOCAL_PACKAGES_PATH}/rez/\${REZ_VERSION}/CentOS-6.2_thru_7/python-2.6/bin/init.sh
+                            fi
+
+                            echo "Sourcing \${REZ_INIT_SCRIPT}"
+                            source \${REZ_INIT_SCRIPT}
+                            export REZ_FLATTEN_ENV=False
+                            # Disable memcache
+                            export REZ_RESOLVE_CACHING=False
+                            
+                            if [[ "\${bake_ts}" == "" ]]
+                            then
+                                epoch_date=${epoch_date}
+                            else
+                                epoch_date=`date --date="\${bake_ts}" +"%s"`
+                            fi
+                            
+                            if [[ "${extra_packages_path}" != "" ]]
+                            then
+                            	export REZ_PACKAGES_PATH=${extra_packages_path}:${REZ_PACKAGES_PATH}
+                            fi
+                            
+                            echo "REZ_PACKAGES_PATH used for resolving presets \${REZ_PACKAGES_PATH}"
+
+                            for preset in ${presets_list}
+                            do
+                               # run rez bake for each preset and get the list of packages 
+                               file_suffix=`echo \${preset} | sed 's@/@_@g'`
+                               rez_package_request=`cat ${REZ_LOCAL_PACKAGES_PATH}/package_request\${file_suffix}.txt`
+                               echo "----------- Resolving \${version_tag} \${preset} using rez version \${REZ_VERSION} ..."
+                               echo "rez-env \${rez_package_request} --shell=bash --norc --time=\${epoch_date}"
+                               /usr/bin/time -f "Elapsed time %E\nMemory(max): %M kbytes\nFile system inputs: %I\nFile system outputs: %O\nContext-switched: %w\n" rez-env \${rez_package_request} --shell=bash --norc --time=\${epoch_date} -c "env > ${REZ_LOCAL_PACKAGES_PATH}/\${version_tag}\${file_suffix}.txt"
+                            done	
+                            echo "Finished resolving environment"
+                        
+                        done
+                        
+                        """
+                        
+                    } //end resolve stage    
+
+                    stage("Diff presets"){
+                        def presets_list = params.LAUNCHER_PRESETS
+                        try{
+                            sh """
+                            set +x
+                            export LAUNCHER_PRESETS="${presets_list}"
+                            TMP_DIFF_ENV_SCRIPT=${REZ_LOCAL_PACKAGES_PATH}/diff_env.py
+                        
+                            echo "
+import logging
+import sys
+import os
+
+
+logger = logging.getLogger(__name__)
+
+DO_NOT_CHECK_ENV_VARIABLES = ['HUDSON_COOKIE', 'REZ_RXT_FILE', 'REZ_CONTEXT_FILE', 'REZ_PATH', 'REZ_PACKAGES_PATH',
+                              'REZ_USED_PACKAGES_PATH', 'REZ_USED_TIMESTAMP', 'REZ_USED_VERSION', 'REZ_VERSION', 'REZ_CONFIG_FILE',
+                              'REZ_USED', 'REZ_CREATED_TIMESTAMP', 'REZ_USED_REQUESTED_TIMESTAMP', 'REZ_LOAD_TIME', 'REZ_SOLVE_TIME',
+                              'ALF_TESTOUTPUTS', 'ADDITIONAL_PACKAGES_PATH', 'ALF_TESTTEMP','REZ_USED_IMPLICIT_PACKAGES' ]
+
+SPECIAL_ENV_VARIABLES = ['PATH', 'PYTHONPATH', '']
+
+
+def main(argv=None):
+    preset_env = os.environ.get('LAUNCHER_PRESETS')
+    presets = preset_env.split(' ')
+    resolve_file_location = os.environ.get('REZ_LOCAL_PACKAGES_PATH')
+    diff = False
+    for preset in presets:
+        if not preset:
+            continue
+        print 'Comparing preset %s ...' % preset
+        preset = preset.strip('')
+        file_suffix = preset.replace(os.path.sep, '_')
+        reference_environment_file = '%s/reference%s.txt' % (resolve_file_location, file_suffix)
+        current_environment_file = '%s/current%s.txt' % (resolve_file_location, file_suffix)
+
+        ref_dict = file_to_dict(reference_environment_file)
+        curr_dict = file_to_dict(current_environment_file)
+
+        ref_dict = fix_special_variables(ref_dict)
+        curr_dict = fix_special_variables(curr_dict)
+
+        if diff_environments(ref_dict, curr_dict):
+            diff = True
+            print ' '
+            print '###### Solve for preset %s differs between reference and current rez version. See above differences #######' % preset
+            print ' '
+        else:
+            print 'No differences found for preset %s ' % preset 
+            print ' '
+
+    if diff:
+        print 'Differences found for at least one preset'
+        print ' '
+        sys.exit(-1)
+
+
+def fix_special_variables(env_dictionary):
+    ''' remove rez form the environment variable, we know it is different'''
+
+    for var in SPECIAL_ENV_VARIABLES:
+        if var in env_dictionary:
+            value_list = env_dictionary[var].split(os.path.pathsep)
+            value_list_no_rez = []
+            for val in value_list:
+                if val.find(os.path.sep + 'rez' + os.path.sep) == -1:
+                    value_list_no_rez.append(val.strip())
+            env_dictionary[var] = os.path.pathsep.join(value_list_no_rez)
+
+    return env_dictionary
+
+
+def diff_environments(reference_dict, current_dict):
+    ret_code = 0
+    for k, v in reference_dict.iteritems():
+        if k in DO_NOT_CHECK_ENV_VARIABLES:
+            continue
+        if k in current_dict:
+            if v != current_dict[k]:
+                ret_code = 1
+                print ' '
+                print '%s differ between environments' %(k)
+                print ' '
+                print 'REFERENCE = %s' %(v.strip())
+                print ' '
+                print 'CURRENT   = %s' %(current_dict[k])
+
+        else:
+            ret_code = 1
+            print '%s is not defined in  the current environment' % k
+
+    return ret_code
+
+
+def file_to_dict(filename):
+    env_dict = {}
+    with open(filename, 'r') as reference:
+        lines = reference.readlines()
+        for line in lines:
+            try:
+                k, v = line.split('=', 1)
+                env_dict[k] = v
+            except:
+                pass
+        return env_dict
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    sys.exit(main())
+                           " > \${TMP_DIFF_ENV_SCRIPT}
+                            
+                            echo python \${TMP_DIFF_ENV_SCRIPT}
+                            python \${TMP_DIFF_ENV_SCRIPT}
+                            
+                            echo "Finished diffing environments\n"
+                            if [ \$? != 0 ]; then
+                               exit 1
+                            fi
+                            """
+                            currentBuild.result = "SUCCESS"
+                            algit.reportStatusToGitHub("SUCCESS", "Build Successful", context)
+                        }catch(e){
+                            currentBuild.result = "FAILURE"
+                            algit.reportStatusToGitHub("ERROR", "Build Failed", context) 
+                            sh "exit 1"  //fail the stage
+                        } //end catch
+
+                    } //end Diff presets stage
+                    
+                    stage("CentOS clean up"){
+                       sh "rm -rf $REZ_LOCAL_PACKAGES_PATH"    
+                    } //end Clean up stage
+                    
+                } // end withEnv
+            }// end outer withEnv
+        }// end node Centos for It}
+    }// end integration
+}// end if skip IT
+
+parallel platformBuilder
+
