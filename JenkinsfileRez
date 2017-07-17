@@ -1,3 +1,4 @@
+#!groovy
 properties([
         parameters([string(defaultValue: "2.0.rc1.38.21", description: 'The version against the new version is compared', name: 'REFERENCE_REZ_VERSION'),
                     string(defaultValue: "", description: 'The timestap to use when comparing presets.', name: 'BAKE_TIMESTAMP'),
