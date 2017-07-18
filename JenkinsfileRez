@@ -18,128 +18,29 @@ pipeline {
       parallel(
 
         linux: {
-        node('CentOS-6.6&&!restricted'){
-          script{
-            algit.reportStatusToGitHub("PENDING", "Build Pending", "CentOS_unit_tests") 
+          node('CentOS-6.6&&!restricted'){
             checkout scm
-
-             withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/${BUILD_TAG}/packages"]) {
-                 sh "mkdir -p $REZ_LOCAL_PACKAGES_PATH"    
-                 sh "rez-build -i"
-                 def version = global.shellCommandOutput("grep -e '^version' package.yaml | sed 's/.*: //g'", verbose=true)
-                 withEnv(["REZ_CONFIG_FILE=${REZ_LOCAL_PACKAGES_PATH}/rez/${version}/CentOS-6.2_thru_7/python-2.6/lib/python2.6/site-packages/rez-${version}-py2.6.egg/rez/rezconfig.py"]) {
-                     status = sh(returnStatus: true, script: "source ${REZ_LOCAL_PACKAGES_PATH}/rez/${version}/CentOS-6.2_thru_7/python-2.6/bin/init.sh && rez-selftest ")
-                     algit.setBuildStatusAndReportToGitHub(status, "CentOS_unit_tests")
-                     sh "rm -rf $REZ_LOCAL_PACKAGES_PATH"    
-                 }
-             }
+            runRezLinuxUnitTests("/tmp/${BUILD_TAG}/packages")
           }
-
-        }
         },
         windows: {
-        node('windows'){
-          script{
-            algit.reportStatusToGitHub("PENDING", "Build Pending", "Windows_unit_tests")
+          node('windows'){
             checkout scm
-             
-             withEnv(["REZ_LOCAL_PACKAGES_PATH=C:\\tmp\\${BUILD_TAG}\\package"]) {
-                 bat("mkdir %REZ_LOCAL_PACKAGES_PATH%")    
-                 def stringForVersion = '_rez_version = "%BUILD_NUMBER%"'
-                 // There is a problem with the long name created by the multibranch do need to rename the current branch 
-                 def cwd =  global.shellCommandOutput("echo %CD%")
-                 dir(".."){
-                     bat("if exist rez_UT_${BRANCH_NAME} ( rename rez_UT_${BRANCH_NAME} rez_UT_${BRANCH_NAME}.bck )")
-                     bat("rename ${cwd} rez_UT_${BRANCH_NAME}")
-                     bat("if exist rez_UT_${BRANCH_NAME}.bck ( rmdir /s/q rez_UT_${BRANCH_NAME}.bck )")
-                     dir("rez_UT_${BRANCH_NAME}"){
-                         bat("echo ${stringForVersion} > src\\rez\\utils\\_version.py")
-                         bat("C:\\Python27\\python install_windows.py -v %REZ_LOCAL_PACKAGES_PATH%\\rez\\%BUILD_NUMBER%")
-             
-                         withEnv(["PATH=${REZ_LOCAL_PACKAGES_PATH}\\rez\\${BUILD_NUMBER}\\Scripts\\rez;${PATH}","REZ_BUILD_THREAD_COUNT=1"]) {
-                             status = bat(returnStatus: true, script: "rez selftest")
-                             algit.setBuildStatusAndReportToGitHub(status, "Windows_unit_tests")
-                             bat("if exist ${REZ_LOCAL_PACKAGES_PATH} ( rmdir /s/q ${REZ_LOCAL_PACKAGES_PATH} )")
-                         }
-                     }
-                 }    
-             }
-          
-
+            runRezWindowsUnitTests("C:\\tmp\\${BUILD_TAG}\\package")
            }
-        }
         },
         mac: {
           node('mac'){
-            script{
-              algit.reportStatusToGitHub("PENDING", "Build Pending", "OSX_unit_tests")
-              checkout scm
+            checkout scm
+            runRezLinuxUnitTests("/tmp/${BUILD_TAG}/packages")
 
-              withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/${BUILD_TAG}/packages"]) {
-                  sh "mkdir -p $REZ_LOCAL_PACKAGES_PATH"    
-                  def stringForVersion = '_rez_version = \\"${BUILD_NUMBER}\\"'
-                  sh "echo ${stringForVersion} > src/rez/utils/_version.py"
-                  sh "/usr/bin/python2.7 install_windows.py -v $REZ_LOCAL_PACKAGES_PATH/rez/${BUILD_TAG}"
-
-                  withEnv(["PATH=$REZ_LOCAL_PACKAGES_PATH/rez/${BUILD_TAG}/bin/rez:$PATH"]) {
-                      status = sh(returnStatus: true, script: "rez selftest ")
-                      algit.setBuildStatusAndReportToGitHub(status, "OSX_unit_tests")
-                      sh "rm -rf $REZ_LOCAL_PACKAGES_PATH"    
-                  }
-              }
-
-              }
            }
-
         },
         integration: {
           node('CentOS-6.6&&!restricted'){
-            script{
-              def epoch_date=global.getCurrentEpochTime()
-              checkout scm
-              algit.reportStatusToGitHub("PENDING", "Build Pending", "CentOS_integration_tests") 
-
-              withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/${BUILD_TAG}_IT/packages"]) {
-                  sh "mkdir -p $REZ_LOCAL_PACKAGES_PATH"    
-                  sh "rez-build -i --variants 0" 
-                  def version = global.shellCommandOutput("grep -e '^version' package.yaml | sed 's/.*: //g'", verbose=true)
-                  withEnv(["REZ_CONFIG_FILE=${REZ_LOCAL_PACKAGES_PATH}/rez/${version}/CentOS-6.2_thru_7/python-2.6/lib/python2.6/site-packages/rez-${version}-py2.6.egg/rez/rezconfig.py"]) {
-                      epoch_date = global.getValueWithDefault(params.BAKE_TIMESTAMP, global.getCurrentEpochTime())
-                      def presets_list = params.LAUNCHER_PRESETS
-                      def reference_rez_version = params.REFERENCE_REZ_VERSION
-                      def extra_packages_path = params.EXTRA_PACKAGES_PATH
-
-                      // Bake Presets
-                      def bake_preset_script = libraryResource('al/bash/rez/bake_presets.sh')
-                      writeFile file: 'bake_presets.sh', text: bake_preset_script
-                      sh "/bin/bash bake_presets.sh \"${presets_list}\" ${epoch_date}"
-
-                      // Resolve requests
-                      resolve_request_script = libraryResource('al/bash/rez/resolve_requests.sh')
-                      writeFile file: 'resolve_requests.sh', text: resolve_request_script
-                      sh "/bin/bash resolve_requests.sh \"${presets_list}\" ${reference_rez_version} ${epoch_date} ${extra_packages_path}"
-                      
-                      // Diff environments
-                      try{
-                          withEnv(["REZ_LOCAL_PACKAGES_PATH=/tmp/${BUILD_TAG}_IT/packages","LAUNCHER_PRESETS=${presets_list}"]) {
-                              diff_env_script=libraryResource('al/python/rez/diff_env.py')
-                              sh diff_env_script
-                              currentBuild.result = "SUCCESS"
-                              algit.reportStatusToGitHub("SUCCESS", "Build Successful", context)
-                          }
-                      }catch(e){
-                          currentBuild.result = "FAILURE"
-                          algit.reportStatusToGitHub("ERROR", "Build Failed", context) 
-                          sh "exit 1"  //fail the stage
-                      } //end catch
-
-                     sh "rm -rf $REZ_LOCAL_PACKAGES_PATH"    
-
-                }
-              } 
-            }//end Script
-
-          }//end node
+            checkout scm
+            runRezLinuxIntegrationTests("/tmp/${BUILD_TAG}/packages")
+          }
         })
       }
     }
