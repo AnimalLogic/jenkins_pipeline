@@ -9,7 +9,6 @@ pipeline {
     stage('test') {
       steps {
         sh 'echo "running unit tests"'
-        runPythonScript 'al/jenkins/batman.py'
       }
     }
     stage('release') {
